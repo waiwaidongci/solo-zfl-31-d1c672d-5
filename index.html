@@ -82,9 +82,9 @@ label .req{color:var(--red)}
 @media(max-width:1000px){.two{grid-template-columns:1fr}}
 .modal-mask{position:fixed;inset:0;background:rgba(40,30,20,.45);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px}
 .modal{background:var(--paper);border-radius:12px;width:min(680px,100%);max-height:90vh;display:flex;flex-direction:column;border-top:5px solid var(--gold)}
-.modal h3{margin:0;padding:15px 18px;border-bottom:1px solid var(--line);font-size:16px;display:flex;justify-content:space-between;align-items:center}
-.modal .body{padding:6px 18px 12px;overflow-y:auto}
-.modal .foot{padding:12px 18px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px}
+.modal h3{margin:0;padding:15px 18px;border-bottom:1px solid var(--line);font-size:16px;display:flex;justify-content:space-between;align-items:center;flex:0 0 auto}
+.modal .body{padding:6px 18px 12px;overflow-y:auto;flex:1 1 auto;min-height:0}
+.modal .foot{padding:12px 18px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px;flex:0 0 auto}
 .x{cursor:pointer;border:0;background:none;font-size:20px;color:var(--muted);line-height:1}
 .formerr{background:var(--bad-bg);color:var(--red-d);border:1px solid #e3b7af;border-radius:7px;padding:9px 12px;margin-top:12px;font-weight:700;display:none}
 .formerr.show{display:block}
@@ -187,6 +187,24 @@ function genNo(kind, prefix, pad=3){
   return prefix + ym + String(state.seq[kind]).padStart(pad,"0");
 }
 function find(a,id){ return a.find(x=>x.id===id); }
+/* 统一从弹窗表单取值（兼容 jsdom 及真实浏览器，避免 form.xxx 直接访问的差异/命名冲突）；
+   也兼容直接传入普通对象的调用方式 */
+function fv(form,name){
+  if(form && form.elements){
+    const col=form.elements;
+    const el=col.namedItem?col.namedItem(name):col[name];
+    if(el!=null) return el.value==null ? "" : String(el.value);
+  }
+  if(form && form[name]!=null) return String(form[name]);
+  return "";
+}
+function formVals(form){
+  const out={};
+  form.querySelectorAll("input,select,textarea").forEach(el=>{
+    if(el.name && !(el.name in out)) out[el.name]=fv(form,el.name);
+  });
+  return out;
+}
 function toast(msg, kind){
   const el=document.createElement("div");
   el.className="toast "+(kind||"");
@@ -383,10 +401,10 @@ function createVersion(proofId, form, container){
   if(latest && latest.status==="sent") throw fail("当前版本已送样、客户尚未回复，请先登记反馈或退样，再新建版本重打");
   const reqs = requirementInputs(container);
   if(!reqs.length) throw fail("至少登记一种色线及单件用量");
-  if(!form.versionLabel.trim()) throw fail("请填写版本名称（如 初样/二样）");
+  if(!fv(form,"versionLabel").trim()) throw fail("请填写版本名称（如 初样/二样）");
   const no = state.versions.filter(v=>v.proofId===proofId).length+1;
   const v = {id:"v"+Date.now()+Math.floor(Math.random()*1000), proofId, no,
-    label:form.versionLabel.trim(), weave:form.weave.trim(), spec:form.spec.trim(),
+    label:fv(form,"versionLabel").trim(), weave:fv(form,"weave").trim(), spec:fv(form,"spec").trim(),
     requirements:reqs, status:"draft", sentAt:null, logs:[], createdAt:todayISO()};
   state.versions.push(v);
   v.logs.push({at:todayISO(), text:"建立打样 v"+no+"（"+v.label+"）"});
@@ -395,7 +413,7 @@ function createVersion(proofId, form, container){
 function updateDraftVersion(v, form, container){
   const reqs = requirementInputs(container);
   if(!reqs.length) throw fail("至少登记一种色线及单件用量");
-  v.label=form.versionLabel.trim()||v.label; v.weave=form.weave.trim(); v.spec=form.spec.trim();
+  v.label=fv(form,"versionLabel").trim()||v.label; v.weave=fv(form,"weave").trim(); v.spec=fv(form,"spec").trim();
   v.requirements=reqs;
   v.logs.push({at:todayISO(), text:"修改草稿规格/色线用量"});
   save(); renderAll(); toast("草稿已更新","ok");
@@ -712,11 +730,11 @@ function modal(title, bodyHTML, opts){
   opts = opts||{};
   const mask=document.createElement("div");
   mask.className="modal-mask";
-  mask.innerHTML='<div class="modal"><h3><span></span><button class="x" type="button">×</button></h3>'+
-    '<form class="body" novalidate></form><div class="foot"></div></div>';
+  mask.innerHTML='<form class="modal" novalidate><h3><span></span><button class="x" type="button">×</button></h3>'+
+    '<div class="body"></div><div class="foot"></div></form>';
   mask.querySelector("h3 span").textContent=title;
   const form=mask.querySelector("form");
-  form.innerHTML = bodyHTML + '<div class="formerr"></div>';
+  form.querySelector(".body").innerHTML = bodyHTML + '<div class="formerr"></div>';
   const foot=mask.querySelector(".foot");
   function close(){ mask.remove(); }
   mask.querySelector(".x").onclick=close;
@@ -1092,7 +1110,7 @@ function openProof(proof){
     modal("新建打样版本", versionForm(), {
       okText:"保存版本",
       after:f=>reqBoxSetup(f, latest?versionReqs(latest):[{threadId:"",qty:""}]),
-      onSubmit:f=>{ createVersion(proof.id, f, f.querySelector("#reqBox")); }
+      onSubmit:f=>{ createVersion(proof.id, f, f.querySelector("#reqBox")); reopenProof(proof.id); }
     });
   };
   const nbb=m.querySelector("#newBatchBtn");
@@ -1115,11 +1133,11 @@ function handleVersionAction(act, id){
   if(act==="send"){ sendVersion(v); reopenProof(v.proofId); }
   if(act==="feedback") modal("客户反馈 · v"+v.no,
     '<label>反馈内容<span class="req">*</span></label><textarea name="text" placeholder="如 金线偏亮，牡丹花心改为朱红"></textarea>',
-    {onSubmit:f=>{ feedbackVersion(v,f.text.value); reopenProof(v.proofId); }});
+    {onSubmit:f=>{ feedbackVersion(v,fv(f,'text')); reopenProof(v.proofId); }});
   if(act==="approve") confirmDialog("确认 v"+v.no+" 通过？通过后该纹样锁定作为生产确认样。",()=>{approveVersion(v); reopenProof(v.proofId);});
   if(act==="reject") modal("退样 · v"+v.no,
     '<label>退样原因<span class="req">*</span></label><textarea name="text" placeholder="如 配色与来样不符，需重打"></textarea>',
-    {okText:"确认退样", onSubmit:f=>{ rejectVersion(v,f.text.value); reopenProof(v.proofId); }});
+    {okText:"确认退样", onSubmit:f=>{ rejectVersion(v,fv(f,'text')); reopenProof(v.proofId); }});
   if(act==="editDraft") modal("修改草稿 · v"+v.no, versionForm(v),{
     okText:"保存修改",
     after:f=>reqBoxSetup(f, versionReqs(v)),
@@ -1139,7 +1157,7 @@ function openNewBatch(o){
     '<dt>已排数量</dt><dd>'+qty(st.scheduledQty)+'</dd><dt>剩余可排</dt><dd><b>'+qty(st.remainSchedule)+'</b></dd></dl>'+
     '<label>本批数量<span class="req">*</span></label><input name="qty" type="number" min="1" step="1" value="'+Math.max(1,st.remainSchedule)+'">'+
     '<div class="section-note">确认样通过后才能生成批次；批量将按比例折算各色线领料需求。</div>',
-    {okText:"生成批次", onSubmit:f=>createBatch(o.id,{qty:f.qty.value})});
+    {okText:"生成批次", onSubmit:(f,close)=>{ createBatch(o.id,{qty:fv(f,"qty")}); document.querySelectorAll(".modal-mask").forEach(x=>x.remove()); ui.tab="batches"; renderAll(); }});
 }
 function openBatch(b){
   const o=find(state.orders,b.orderId);
@@ -1167,7 +1185,7 @@ function openSchedule(b){
     '<div class="row"><div><label>开工日期<span class="req">*</span></label><input type="date" name="planStart" value="'+esc(b.planStart||todayISO())+'"></div>'+
     '<div><label>计划完工<span class="req">*</span></label><input type="date" name="planEnd" value="'+esc(b.planEnd||offsetDate(7))+'"></div></div>'+
     '<div class="section-note">同机台日期重叠将被拦截；确认样未通过不能排产。</div>',
-    {okText:"确认排产", onSubmit:f=>scheduleBatch(b,{machineId:f.machineId.value,planStart:f.planStart.value,planEnd:f.planEnd.value})});
+    {okText:"确认排产", onSubmit:f=>scheduleBatch(b,{machineId:fv(f,"machineId"),planStart:fv(f,"planStart"),planEnd:fv(f,"planEnd")})});
 }
 function openPicking(b){
   // 打开前做余量校验
@@ -1230,7 +1248,7 @@ function openQC(b){
     '<div><label style="display:inline;margin-right:16px"><input type="radio" name="pass" value="1" checked style="width:auto"> 合格</label>'+
     '<label style="display:inline"><input type="radio" name="pass" value="0" style="width:auto"> 不合格（返工）</label></div>'+
     '<label>质检说明<span class="req">*</span></label><textarea name="note" placeholder="合格填写批次质检记录；不合格必须填写返工说明"></textarea>',
-    {okText:"提交质检", onSubmit:f=>qcBatch(b,f.pass.value==="1",f.note.value)});
+    {okText:"提交质检", onSubmit:f=>qcBatch(b,fv(f,"pass")==="1",fv(f,"note"))});
 }
 function openDeliver(b){
   const o=find(state.orders,b.orderId);
@@ -1242,7 +1260,7 @@ function openDeliver(b){
     '<div><label>交付日期<span class="req">*</span></label><input type="date" name="at" value="'+todayISO()+'"></div></div>'+
     '<div class="row"><div><label>签收人</label><input name="receiver" value="'+esc(o.customer)+'"></div></div>'+
     '<label>备注</label><textarea name="note"></label>',
-    {okText:"确认交付", onSubmit:f=>deliverBatch(b,{qty:f.qty.value,at:f.at.value,receiver:f.receiver,note:f.note})});
+    {okText:"确认交付", onSubmit:f=>deliverBatch(b,{qty:fv(f,"qty"),at:fv(f,"at"),receiver:fv(f,"receiver"),note:fv(f,"note")})});
 }
 
 /* ================= 事件绑定 ================= */
@@ -1262,7 +1280,7 @@ function wirePage(){
   bind("#deliveryFilter","change",e=>{ui.deliveryFilter=e.target.value;renderMain();});
 
   bind("#newOrderBtn","click",()=>modal("录入客户订单",orderForm(),{okText:"保存订单",onSubmit:f=>createOrder({
-    customer:f.customer.value,pattern:f.pattern.value,spec:f.spec.value,qty:f.qty.value,unit:f.unit.value,dueDate:f.dueDate.value,note:f.note.value})}));
+    customer:fv(f,'customer'),pattern:fv(f,'pattern'),spec:fv(f,'spec'),qty:fv(f,'qty'),unit:fv(f,'unit'),dueDate:fv(f,'dueDate'),note:fv(f,'note')})}));
 
   bind("#newThreadBtn","click",()=>modal("新建色线档案",
     '<div class="row"><div><label>色线名称<span class="req">*</span></label><input name="name" placeholder="如 牡丹红绒线"></div>'+
@@ -1270,7 +1288,7 @@ function wirePage(){
     '<div><label>色标</label><input type="color" name="color" value="'+THREAD_COLORS[state.threads.length%THREAD_COLORS.length]+'" style="height:42px;padding:2px"></div>'+
     '<div><label>期初库存</label><input type="number" min="0" step="0.01" name="opening" value="0"></div></div>'+
     '<label>供应商</label><input name="supplier">',
-    {onSubmit:f=>createThread({name:f.name.value,unit:f.unit.value,color:f.color.value,opening:f.opening.value,supplier:f.supplier.value})}));
+    {onSubmit:f=>createThread({name:fv(f,'name'),unit:fv(f,'unit'),color:fv(f,'color'),opening:fv(f,'opening'),supplier:fv(f,'supplier')})}));
   bind("#stockInBtn","click",()=>{
     if(!state.threads.length) return toast("请先建立色线档案","err");
     modal("采购入库",
@@ -1278,7 +1296,7 @@ function wirePage(){
       '<div class="row"><div><label>数量<span class="req">*</span></label><input type="number" min="0.01" step="0.01" name="qty"></div>'+
       '<div><label>日期</label><input type="date" name="at" value="'+todayISO()+'"></div></div>'+
       '<label>说明</label><input name="note" placeholder="如 苏州东仓补货">',
-      {onSubmit:f=>stockIn({threadId:f.threadId.value,qty:f.qty.value,at:f.at.value,note:f.note})});
+      {onSubmit:f=>stockIn({threadId:fv(f,'threadId'),qty:fv(f,'qty'),at:fv(f,'at'),note:fv(f,'note')})});
   });
   bind("#adjustBtn","click",()=>{
     if(!state.threads.length) return toast("请先建立色线档案","err");
@@ -1286,24 +1304,30 @@ function wirePage(){
       '<label>色线<span class="req">*</span></label><select name="threadId">'+threadOptions("",true)+'</select>'+
       '<label>调整数量（盘盈正 / 盘亏负）<span class="req">*</span></label><input type="number" step="0.01" name="qty">'+
       '<label>原因<span class="req">*</span></label><input name="note" placeholder="如 受潮报损 / 盘点盈余">',
-      {onSubmit:f=>adjustStock({threadId:f.threadId.value,qty:f.qty.value,note:f.note})});
+      {onSubmit:f=>adjustStock({threadId:fv(f,'threadId'),qty:fv(f,'qty'),note:fv(f,'note')})});
   });
-  bind("#machineMgrBtn","click",()=>{
-    let body='<button type="button" class="act g" id="addMachineBtn">＋ 登记新机台</button><hr>'+
-      state.machines.map(m=>'<div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0">'+
-        '<span><b>'+esc(m.name)+'</b> <span class="muted small">'+esc(m.no)+' 挡车工：'+esc(m.keeper||"—")+'</span></span>'+
-        '<button type="button" class="act danger" data-mid="'+m.id+'">删除</button></div>').join("")||'<div class="empty">还没有机台</div>';
-    const m=modal("机台档案",body,{view:true});
-    m.querySelector("#addMachineBtn").onclick=()=>modal("登记机台",
-      '<label>机台名称<span class="req">*</span></label><input name="name" placeholder="如 一号大花楼木机">'+
-      '<label>挡车工/负责人</label><input name="keeper">',
-      {onSubmit:f=>createMachine({name:f.name.value,keeper:f.keeper.value})});
-    m.querySelectorAll("[data-mid]").forEach(b=>b.onclick=()=>{ try{deleteMachine(find(state.machines,b.dataset.mid));document.querySelectorAll(".modal-mask").forEach(x=>x.remove());}catch(e){toast(e.message,"err");}});
-  });
+  bind("#machineMgrBtn","click",openMachineMgr);
 
   // 总览 / 各表统一动作委托
   document.querySelectorAll("[data-jump]").forEach(el=>el.onclick=()=>handleJump(el.dataset.jump));
   document.querySelectorAll("[data-act]").forEach(el=>el.onclick=()=>handleAction(el.dataset.act,el.dataset.id));
+}
+function openMachineMgr(){
+  document.querySelectorAll(".modal-mask.machine-mgr").forEach(x=>x.remove());
+  let body='<button type="button" class="act g" id="addMachineBtn">＋ 登记新机台</button><hr>'+
+    (state.machines.map(m=>'<div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0">'+
+      '<span><b>'+esc(m.name)+'</b> <span class="muted small">'+esc(m.no)+' 挡车工：'+esc(m.keeper||"—")+'</span></span>'+
+      '<button type="button" class="act danger" data-mid="'+m.id+'">删除</button></div>').join("")||'<div class="empty">还没有机台</div>');
+  const m=modal("机台档案",body,{view:true});
+  m.classList.add("machine-mgr");
+  m.querySelector("#addMachineBtn").onclick=()=>modal("登记机台",
+    '<label>机台名称<span class="req">*</span></label><input name="name" placeholder="如 一号大花楼木机">'+
+    '<label>挡车工/负责人</label><input name="keeper">',
+    {okText:"保存机台", onSubmit:f=>{ createMachine({name:fv(f,'name'),keeper:fv(f,'keeper')}); openMachineMgr(); }});
+  m.querySelectorAll("[data-mid]").forEach(b=>b.onclick=()=>{
+    try{ deleteMachine(find(state.machines,b.dataset.mid)); openMachineMgr(); }
+    catch(e){ toast(e.message,"err"); }
+  });
 }
 function handleJump(jump){
   const [tab, ...rest] = jump.split(":");
@@ -1324,7 +1348,7 @@ function handleJump(jump){
         '<div class="row"><div><label>数量<span class="req">*</span></label><input type="number" min="0.01" step="0.01" name="qty"></div>'+
         '<div><label>日期</label><input type="date" name="at" value="'+todayISO()+'"></div></div>'+
         '<label>说明</label><input name="note">',
-        {onSubmit:f=>stockIn({threadId:f.threadId.value,qty:f.qty.value,at:f.at.value,note:f.note})});
+        {onSubmit:f=>stockIn({threadId:fv(f,'threadId'),qty:fv(f,'qty'),at:fv(f,'at'),note:fv(f,'note')})});
     }
   },30);
 }
@@ -1346,7 +1370,7 @@ function handleAction(act,id){
     if(act==="cancelBatch") return modal("取消批次 · "+b.no,
       '<label>取消原因<span class="req">*</span></label><textarea name="reason" placeholder="如 客户撤单 / 纹样重大调整"></textarea>'+
       '<p class="section-note">取消后释放机台档期，已领未耗色线全部退回库存并留下流水。</p>',
-      {okText:"确认取消",onSubmit:f=>cancelBatch(b,f.reason.value)});
+      {okText:"确认取消",onSubmit:f=>cancelBatch(b,fv(f,"reason"))});
     if(act==="delThread") return confirmDialog("删除色线「"+t.name+"」？（有流水记录时将被拒绝）",()=>{deleteThread(t);});
   }catch(e){ toast(e._user?e.message:e.message,"err"); }
 }
